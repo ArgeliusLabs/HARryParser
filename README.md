@@ -2,8 +2,10 @@
 
 Installation:
 1. Clone this repo
-2. Install requirements from requirements.txt
-3. Run harryparser.py with appropriate arguments
+2. cd to repo, run <code>
+  pip install .
+  </code>
+3. Run harryparser with appropriate arguments
 
 Examples:
 <code>
