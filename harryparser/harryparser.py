@@ -3,7 +3,7 @@ import argparse
 import openpyxl
 import tldextract
 
-from helpers import *
+from .helpers import *
 
 
 class HarParser():
