@@ -1,15 +1,21 @@
-import argparse
-
 import openpyxl
 import tldextract
 
-from .helpers import *
+try:
+    from .helpers import *
+    from .logger import logger
+except:
+    from helpers import *
+    from logger import logger
+
+from dns_helper import SubdomainScanner
 
 
 class HarParser():
 
-    def __init__(self, har_file, parent_domain, tds_file="tds.json", check_dns=True):
+    def __init__(self, har_file, output_file, parent_domain, tds_file="tds.json", check_dns=True):
         self.har_file = har_file
+        self.output_file = output_file
         self.parent_domain = parent_domain
         self.tds_file = tds_file
         self.check_dns = check_dns
@@ -33,7 +39,8 @@ class HarParser():
         parent_row = 0
         for sheet_name, data in zip(["Headers", "Cookies", "QueryString", "PostData", "ParsedPostData"],
                                     (
-                                    self.headers, self.cookies, self.querystring, self.postdata, self.parsed_postdata)):
+                                            self.headers, self.cookies, self.querystring, self.postdata,
+                                            self.parsed_postdata)):
 
             sheet = wb.create_sheet(sheet_name)
             for i in range(len(columns)):
@@ -54,27 +61,63 @@ class HarParser():
                         traceback.print_exc()
 
         if self.check_dns:
-            subs_sheet = wb.create_sheet("subdomains")
-            for i, value in enumerate(["subdomain", "type", "record_value", "start_domain", "redirect_domain"]):
-                subs_sheet.cell(row=1, column=i + 1).value = value
-            sub_row = 2
-            for subdomain in self.subdomains:
-                dns_records, redirects = check_domain(subdomain)
+            subs_sheet = wb.create_sheet("DNS")
+            scanner = SubdomainScanner(self.subdomains)
+            scanner.scan_subdomains()
+            data = scanner.results
+            rows = []
 
-                for d, _d in dns_records.items():
-                    for i, d_hit in enumerate(_d):
-                        for j, value in enumerate([remove_illegal_chars(subdomain), f'dns_{d}', d_hit]):
-                            subs_sheet.cell(row=sub_row + i, column=j + 1).value = value
-                    sub_row += len(_d)
-
-                for start_domain, redirect_values in redirects.items():
-                    for redirect in redirect_values:
-                        for j, value in enumerate(
-                                [remove_illegal_chars(subdomain), "redirect", start_domain, redirect[0], redirect[1]]):
-                            subs_sheet.cell(row=sub_row, column=j + 1).value = value
-                        sub_row += 1
-
-        wb.save(f"harryparser_{self.parent_domain}_{datetime.now().strftime('%Y-%m-%d_%H.%M.%S')}.xlsx")
+            # Iterate over each subdomain and record type in the data dictionary
+            for subdomain, record_types in data.items():
+                for record_type, record_data in record_types.items():
+                    # Handle empty record types
+                    if not record_data:
+                        rows.append({'Subdomain': subdomain, 'Record Type': record_type})
+                        continue
+                    for ip_address, ip_data in record_data.items():
+                        # Handle empty IP addresses
+                        if not ip_data:
+                            rows.append({'Subdomain': subdomain, 'Record Type': record_type, 'IP Address': ip_address})
+                            continue
+                        for key, value in ip_data.items():
+                            # Handle empty key-value pairs
+                            if not value:
+                                rows.append(
+                                    {'Subdomain': subdomain, 'Record Type': record_type, 'IP Address': ip_address,
+                                     'Key': key})
+                                continue
+                            # Handle multiple redirects
+                            if key == 'redirects':
+                                for redirect in value:
+                                    rows.append(
+                                        {'Subdomain': subdomain, 'Record Type': record_type, 'IP Address': ip_address,
+                                         'Source IP': redirect[0], 'Target URL': redirect[1]})
+                            # Handle multiple A records
+                            elif key == 'a_records':
+                                # Get resolved_ips for Source IP field
+                                resolved_ips = ', '.join(ip_data.get('resolved_ips', []))
+                                for item in value:
+                                    rows.append(
+                                        {'Subdomain': subdomain, 'Record Type': record_type, 'IP Address': ip_address,
+                                         'Key': key.capitalize(), 'Value': item, 'Source IP': resolved_ips})
+                            # Handle resolved IPs for NS records
+                            elif key == 'resolved_ips':
+                                # Skip resolved_ips rows
+                                continue
+            # Write the header row
+            header_row = ['Subdomain', 'Record Type', 'IP Address', 'Key', 'Value', 'Source IP', 'Target URL']
+            header = [cell for cell in header_row]
+            subs_sheet.append(header)
+            # Write the data rows
+            for row, data_row in enumerate(rows, start=2):
+                subs_sheet.cell(row=row, column=1, value=data_row.get('Subdomain', ''))
+                subs_sheet.cell(row=row, column=2, value=data_row.get('Record Type', ''))
+                subs_sheet.cell(row=row, column=3, value=data_row.get('IP Address', ''))
+                subs_sheet.cell(row=row, column=4, value=data_row.get('Key', ''))
+                subs_sheet.cell(row=row, column=5, value=data_row.get('Value', ''))
+                subs_sheet.cell(row=row, column=6, value=data_row.get('Source IP', ''))
+                subs_sheet.cell(row=row, column=7, value=data_row.get('Target URL', ''))
+        wb.save(self.output_file)
 
     def extract_entries(self):
         with open(self.har_file, "r", encoding="utf-8") as f:
@@ -162,17 +205,26 @@ class HarParser():
         self.create_workbook()
 
 
+import os
+import argparse
+
+
 def main():
     parser = argparse.ArgumentParser(description="HAR Parser CLI")
     parser.add_argument("har_file", type=str, help="HAR file to parse")
     parser.add_argument("-p", "--parent_domain", type=str, required=True, help="Parent domain")
-    parser.add_argument("-t", "--tds_file", type=str, default="tds.json",
+    parser.add_argument("-t", "--tds_file", type=str, default="harryparser/tds.json",
                         help="TDS JSON file (default: tds.json if present)")
     parser.add_argument("-c", "--check_dns", action="store_true", default=True, help="Enable DNS checks")
+    parser.add_argument("-o", "--output_dir", type=str, default="output", help="Output directory path")
 
     args = parser.parse_args()
-
-    h = HarParser(args.har_file, args.parent_domain, args.tds_file, check_dns=args.check_dns)
+    # Check if output directory exists and create it if it doesn't
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    output_file = os.path.join(args.output_dir,
+                               f"harryparser_{args.parent_domain}_{datetime.now().strftime('%Y-%m-%d_%H.%M.%S')}.xlsx")
+    h = HarParser(args.har_file, output_file, args.parent_domain, args.tds_file, check_dns=args.check_dns)
     h.extract_entries()
 
 

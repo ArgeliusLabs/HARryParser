@@ -7,8 +7,6 @@ import traceback
 import urllib.parse
 from datetime import datetime
 
-import dns.resolver
-import requests
 from dateutil import parser
 
 
@@ -175,56 +173,6 @@ def remove_illegal_chars(s):
     if type(s) == list:
         return str(s)
     return s
-
-
-def query_dns_records(domain):
-    records = {'A': [], 'CNAME': []}
-    for record_type in records.keys():
-        try:
-            answers = dns.resolver.resolve(domain, record_type)
-            for answer in answers:
-                records[record_type].append(str(answer.target if record_type == 'CNAME' else answer.address))
-        except dns.resolver.NoAnswer:
-            pass
-    return records
-
-
-def record_redirects(domain):
-    try:
-        response = requests.get(f'http://{domain}', allow_redirects=False)
-        if response.status_code in (301, 302):
-            return response.headers['Location']
-    except requests.exceptions.RequestException:
-        pass
-    return None
-
-
-def get_redirect_chain(domain):
-    redirect_chain = []
-    current_domain = domain
-
-    while current_domain:
-        next_domain = record_redirects(current_domain)
-        if next_domain:
-            redirect_chain.append((current_domain, next_domain))
-            current_domain = next_domain
-        else:
-            current_domain = None
-
-    return redirect_chain
-
-
-def check_domain(domain):
-    records = query_dns_records(domain)
-    redirect_results = {}
-
-    for record_type, record_values in records.items():
-        for value in record_values:
-            redirect_chain = get_redirect_chain(value)
-            if redirect_chain:
-                redirect_results[value] = redirect_chain
-
-    return records, redirect_results
 
 
 def parse_json_data(text):  # Union[str, Dict, list]) -> Dict[str, Any]:
