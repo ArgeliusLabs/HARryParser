@@ -24,7 +24,6 @@ class SubdomainScanner:
             thread.join()
 
     def _scan_subdomain(self, subdomain):
-        # TODO: implement scanning function
         logger.info(f'Scanning subdomain: {subdomain}')
         output = self._check_domain(subdomain)
         # Add result to shared dictionary
